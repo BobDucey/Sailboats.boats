@@ -644,6 +644,8 @@ html:not(.embedded) .hero h1{font-size:22px;}
 /* --- end phone layout fix --- */
 </style>
 <script>if(window.parent!==window)document.documentElement.classList.add('embedded');</script>
+<!-- Capt. Bob conversion tracking (Google Ads) -->
+<script src="https://aiboatleads.com/captbob-track.js" defer></script>
 </head>
 <body>
 
@@ -858,7 +860,7 @@ const leadClose = document.getElementById('leadClose');
 const SYSTEM_PROMPT = `You are Capt. Bob, the AI buying assistant on Sailboats.boats, part of the AI Boat Leads network.
 You talk to prospective boat buyers the way a great, low-pressure salesperson would: warm, brief, one question at a time.
 
-You must ask these 8 questions IN THIS EXACT ORDER, one per reply, never skipping ahead or asking two at once. Use the wording shown, word for word:
+You must ask these 10 questions IN THIS EXACT ORDER, one per reply, never skipping ahead or asking two at once. Use the wording shown, word for word:
 1. Please select the type you're interested in below.
 2. Are you looking for a new boat or a used one?
 3. How do you plan to use it — fishing, cruising or just general recreation?
@@ -867,6 +869,8 @@ You must ask these 8 questions IN THIS EXACT ORDER, one per reply, never skippin
 6. Will you be keeping the boat docked at the water, or will you be trailering it?
 7. What's your budget for the boat?
 8. When are you planning to make your purchase — are you ready to buy soon or in the early research phase?
+9. I'll need your zip code to find the closest dealer.
+10. And last thing — I'll need your email to send your dealer matches.
 
 Rules:
 - Each reply is the next question from the list above and nothing else: no praise, no comment on the buyer's previous answer, no extra sentences. The only change you may make to the wording is adding the buyer's first name, as described in the next rule.
@@ -875,10 +879,10 @@ Rules:
 - That SHOW_BOAT_TYPES line must be the very last line of that first reply, alone, with nothing else on it, and must only ever appear once, on that first question.
 - Do not reorder, combine or skip questions, even if the buyer's earlier answer seems to partly cover a later question.
 - If the buyer asks you something, or gives a reply that does not answer the question, respond in one short sentence and then ask the same question again.
-- Their zip code is already on file, so never ask where they live or what area they're in.
 - Each reply is max 2 sentences.
-- Never ask for name, email, or phone — that happens after this chat.
-- Once all 8 questions are answered, thank them briefly, tell them you're pulling their matches, then add a new final line containing exactly: MATCH_READY
+- Question 9 (zip code): if what they give you isn't a valid 5-digit zip code, politely ask them to double-check it and send it again before moving on.
+- Question 10 (email): if what they give you doesn't look like a valid email address, politely ask them to double-check it and send it again before moving on.
+- Once all 10 questions are answered, reply only with a short thank-you saying you have everything you need (for example "Thanks, Bob — I have everything I need."). Do not promise matches, dealers, emails or any timing — the page shows the buyer what happens next right after your message. Then add a new final line containing exactly: MATCH_READY
 - That MATCH_READY line must be the very last line of your reply, alone, with nothing else on it. Never explain it to the user, never format it, and only include it the moment the conversation is truly complete.
 - Keep total replies short. No markdown, no bullet lists, just plain conversational text.`;
 
@@ -902,6 +906,7 @@ let leadZip = null;
 let buyerFirstName = null;
 let activeSystemPrompt = SYSTEM_PROMPT;
 let pendingText = null;
+let pendingMatchReady = false;
 
 function addBubble(role, text) {
 const b = document.createElement('div');
@@ -984,6 +989,7 @@ window.speechSynthesis.speak(u);
 
 const BACKEND_URL = 'https://sailboats-boats.vercel.app';
 const CHAT_SESSION_ID = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(36).slice(2));
+const SOURCE_METRO = '';
 
 // Log a lightweight page-view (top-of-funnel), independent of whether chat is ever used.
 (function() {
@@ -991,7 +997,7 @@ try {
 fetch(BACKEND_URL + "/api/visit", {
 method: "POST",
 headers: { "Content-Type": "application/json" },
-body: JSON.stringify({ site: 'Sailboats.boats', page: null, session_id: CHAT_SESSION_ID })
+body: JSON.stringify({ site: 'Sailboats.boats', page: SOURCE_METRO, session_id: CHAT_SESSION_ID })
 }).catch(function(e) { console.error('Visit logging error:', e); });
 } catch (e) {}
 })();
@@ -1005,7 +1011,7 @@ body: JSON.stringify({
 system: systemOverride || SYSTEM_PROMPT,
 messages: msgs,
 site: 'Sailboats.boats',
-page: null,
+page: SOURCE_METRO,
 session_id: CHAT_SESSION_ID
 })
 });
@@ -1031,6 +1037,7 @@ email: leadEmail,
 zip: leadZip,
 name: buyerFirstName,
 site: 'Sailboats.boats',
+source_metro: SOURCE_METRO,
 messages: messages,
 ...extra,
 boat_types: selectedBoatTypes
@@ -1053,10 +1060,6 @@ console.error('Network error saving lead:', e);
 
 function trySend(text) {
 if (!text || !text.trim()) return;
-if (!leadCaptured) {
-openGate(text);
-return;
-}
 if (!buyerFirstName) {
 setFirstName(text);
 return;
@@ -1117,7 +1120,50 @@ addBubble('assistant', "Having trouble connecting right now — mind trying agai
 sendBtn.disabled = false;
 saveLeadProgress();
 if (matchReady) {
+if (!leadCaptured) {
+await captureLeadFromConversation();
+}
+if (leadCaptured) {
 getMatches();
+} else {
+pendingMatchReady = true;
+openGate();
+}
+}
+}
+
+// Data extraction uses its own instructions (not Capt. Bob's chat rules),
+// so the reply comes back as clean JSON instead of conversation.
+const EXTRACT_SYSTEM_PROMPT = `You are a data extraction tool for a boat-buying chat. Read the conversation and reply with ONLY the single JSON object requested in the last message. No greeting, no explanation, no markdown fences. Use the buyer's actual answers wherever they gave them.`;
+
+function parseJsonReply(raw) {
+const text = String(raw || '').replace(/```json|```/g, '');
+const start = text.indexOf('{');
+const end = text.lastIndexOf('}');
+if (start === -1 || end <= start) throw new Error('No JSON in reply');
+return JSON.parse(text.slice(start, end + 1));
+}
+
+async function captureLeadFromConversation() {
+const extractPrompt = `Based on the conversation so far, return ONLY a JSON object, nothing else, no markdown fences, with this exact shape:
+{"zip":"...","email":"..."}
+Extract the exact 5-digit zip code and exact email address the buyer provided earlier in this conversation. If either one is missing or doesn't look valid, use null for that field instead of guessing.`;
+try {
+const msgs = messages.concat([{ role: 'user', content: extractPrompt }]);
+const raw = await callClaude(msgs, EXTRACT_SYSTEM_PROMPT);
+const data = parseJsonReply(raw);
+const zip = (data.zip || '').toString().trim();
+const email = (data.email || '').toString().trim();
+const zipValid = /^\d{5}$/.test(zip);
+const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+if (zipValid && emailValid) {
+leadZip = zip;
+leadEmail = email;
+leadCaptured = true;
+await saveLeadProgress();
+}
+} catch (e) {
+console.error('Lead extraction error:', e);
 }
 }
 
@@ -1128,9 +1174,8 @@ If any field wasn't mentioned, make a reasonable brief guess based on context, o
 let data;
 try {
 const msgs = messages.concat([{ role: 'user', content: extractPrompt }]);
-const raw = await callClaude(msgs, activeSystemPrompt);
-const cleaned = raw.replace(/```json|```/g, '').trim();
-data = JSON.parse(cleaned);
+const raw = await callClaude(msgs, EXTRACT_SYSTEM_PROMPT);
+data = parseJsonReply(raw);
 } catch (e) {
 data = {
 use_case: "Sailboat shopper",
@@ -1144,19 +1189,30 @@ addMatchResultBubble(data);
 saveLeadProgress(data);
 }
 
+let matchResultShown = false;
+
 function addMatchResultBubble(d) {
 // Phase 1 dealer matching isn't live yet, so every buyer sees the honest
 // "no match yet" state. Once /api/match.js exists, replace `false` below
 // with the real match result.
 const realMatchFound = false;
 
+// Show the result once per chat, even if a later reply signals MATCH_READY again.
+if (matchResultShown) return;
+matchResultShown = true;
+
+const metroName = String(SOURCE_METRO || '').split(',')[0].trim();
+const areaText = metroName ? `the ${metroName} area` : 'your area';
+const boatText = (selectedBoatTypes && selectedBoatTypes.length) ? selectedBoatTypes.join(' or ') : 'the boat you want';
+const thanksText = buyerFirstName ? `Thanks, ${buyerFirstName}.` : 'Thanks.';
+
 const headline = realMatchFound
 ? 'Good news — we found a local dealer for you!'
-: "Unfortunately, we don't have a local dealer in your area yet.";
+: `${thanksText} I've saved everything you told me.`;
 
 const subline = realMatchFound
-? `A dealer near ${d.location} carries the boat you're looking for and will be contacting you shortly at ${leadEmail || 'your email'}.`
-: `We're actively expanding our dealer network in ${d.location}. Your information has been saved, and we'll reach out as soon as a matching dealer joins.`;
+? `A dealer in ${areaText} carries the boat you're looking for and will be contacting you shortly at ${leadEmail || 'your email'}.`
+: `We're still signing up dealers in ${areaText}, so we'll email you as soon as one who carries ${boatText} is ready to help.`;
 
 const text = `${headline} ${subline}`;
 
@@ -1243,8 +1299,14 @@ leadCaptured = true;
 
 gateOverlay.classList.remove('show');
 
-// initial save: capture email, zip, and the greeting + first query even before Claude replies
+// initial save: capture email, zip, and the full conversation now that it's complete
 await saveLeadProgress();
+
+if (pendingMatchReady) {
+pendingMatchReady = false;
+getMatches();
+return;
+}
 
 const toSend = pendingText;
 pendingText = null;
