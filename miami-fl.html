@@ -623,7 +623,24 @@ font-family: var(--mono);
 .chat-head-left .avatar img{width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;}
 @media (max-width: 720px){.hero-split{flex-direction:column;align-items:stretch;} .hero-photo-wrap{flex:none;}}
 /* --- end hero refresh --- */
+/* --- phone layout fix --- */
+.input-row input{min-width:0;}
+.hero-grid > div{min-width:0;}
+@media (max-width: 979px){
+html:not(.embedded) .nav{padding:10px 18px;}
+html:not(.embedded) .hero{padding:14px 18px 40px;}
+html:not(.embedded) .hero-grid{gap:14px;}
+html:not(.embedded) .eyebrow{margin-bottom:8px;}
+html:not(.embedded) .hero h1{font-size:30px;line-height:1.15;margin-bottom:6px;}
+html:not(.embedded) .hero-split{display:none;}
+html:not(.embedded) .chat-card{height:auto;max-height:none;}
+}
+@media (max-width: 720px){
+html:not(.embedded) .hero h1{font-size:22px;}
+}
+/* --- end phone layout fix --- */
 </style>
+<script>if(window.parent!==window)document.documentElement.classList.add('embedded');</script>
 </head>
 <body>
 
